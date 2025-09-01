@@ -4,6 +4,7 @@ import numpy as np
 import gymnasium as gym
 from gymnasium import spaces
 from stable_baselines3 import PPO
+from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.monitor import Monitor
 
 from python.shuttlecock_env import ShuttlecockEnvC, GymWrapper
@@ -50,6 +51,49 @@ class ShuttleGym(gym.Env):
         return obs, reward, terminated, truncated, info
 
 
+class EnvDemoLikeCallback(BaseCallback):
+    def __init__(self, csv_path: str | None = None, verbose: int = 1):
+        super().__init__(verbose)
+        self.csv_path = csv_path
+        self._csv = None
+        self._wrote_header = False
+
+    def _on_training_start(self) -> None:
+        if self.csv_path:
+            import os
+            os.makedirs(os.path.dirname(self.csv_path) or ".", exist_ok=True)
+            self._csv = open(self.csv_path, "w")
+            self._csv.write(
+                "step,R_total,R_alt,R_att,R_spin,R_effort,dwell_alt,dwell_att,rem_impulse,substeps,altitude,AoA,AoS,roll\n"
+            )
+            self._wrote_header = True
+
+    def _on_step(self) -> bool:
+        infos = self.locals.get("infos", [])
+        rewards = self.locals.get("rewards", None)
+        if infos and len(infos) > 0:
+            info = infos[0]
+            r_total = float(rewards[0]) if rewards is not None else 0.0
+            line = (
+                f"step={self.num_timesteps} total={r_total:.6g} "
+                f"[alt={info.get('R_alt',0):.6g}, att={info.get('R_att',0):.6g}, spin={info.get('R_spin',0):.6g}, "
+                f"effort={info.get('R_effort',0):.6g}] dwell_alt={info.get('dwell_alt',0):.2%} dwell_att={info.get('dwell_att',0):.2%} "
+                f"rem_impulse={info.get('remaining_impulse',0):.3g} Ns substeps={info.get('substeps',0)} "
+                f"alt={info.get('altitude',0):.3f} AoA={info.get('AoA',0):.3g} AoS={info.get('AoS',0):.3g} roll={info.get('roll',0):.3g}"
+            )
+            if self.verbose:
+                print(line)
+            if self._csv:
+                self._csv.write(
+                    f"{self.num_timesteps},{r_total},{info.get('R_alt',0)},{info.get('R_att',0)},{info.get('R_spin',0)},{info.get('R_effort',0)},{info.get('dwell_alt',0)},{info.get('dwell_att',0)},{info.get('remaining_impulse',0)},{info.get('substeps',0)},{info.get('altitude',0)},{info.get('AoA',0)},{info.get('AoS',0)},{info.get('roll',0)}\n"
+                )
+        return True
+
+    def _on_training_end(self) -> None:
+        if self._csv:
+            self._csv.close()
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", default="cpp/configs/shuttlecock_250km.json")
@@ -57,6 +101,8 @@ def main():
     ap.add_argument("--control-dt", type=float, default=5.0)
     ap.add_argument("--save", default="checkpoints/shuttlecock_ppo_v1")
     ap.add_argument("--resume", default=None)
+    ap.add_argument("--print-steps", action="store_true", help="Print per-step env_demo-like lines")
+    ap.add_argument("--csv-log", default=None, help="Optional CSV log file for per-step lines")
     args = ap.parse_args()
 
     os.makedirs("checkpoints", exist_ok=True)
@@ -65,12 +111,13 @@ def main():
     steps_per_episode = int(10 * (5400.0 / args.control_dt))
     total_timesteps = steps_per_episode * args.episodes
 
+    callback = EnvDemoLikeCallback(csv_path=args.csv_log, verbose=1 if args.print-steps else 0)
     if args.resume:
         model = PPO.load(args.resume, env=env)
-        model.learn(total_timesteps=total_timesteps, reset_num_timesteps=False)
+        model.learn(total_timesteps=total_timesteps, reset_num_timesteps=False, callback=callback)
     else:
         model = PPO("MlpPolicy", env, verbose=1, tensorboard_log="runs/")
-        model.learn(total_timesteps=total_timesteps)
+        model.learn(total_timesteps=total_timesteps, callback=callback)
 
     model.save(args.save)
     print(f"Saved model to {args.save}")
@@ -78,4 +125,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

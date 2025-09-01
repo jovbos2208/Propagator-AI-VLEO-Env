@@ -140,6 +140,7 @@ class GymWrapper:
             "R_alt": sr.R_alt, "R_att": sr.R_att, "R_spin": sr.R_spin, "R_effort": sr.R_effort,
             "dwell_alt": sr.dwell_alt_frac, "dwell_att": sr.dwell_att_frac,
             "remaining_impulse": sr.remaining_impulse_Ns, "substeps": sr.substeps,
+            "altitude": sr.obs.altitude_m, "AoA": sr.obs.aoa_rad, "AoS": sr.obs.aos_rad, "roll": sr.obs.roll_rad,
         }
         return obs, reward, terminated, truncated, info
 
