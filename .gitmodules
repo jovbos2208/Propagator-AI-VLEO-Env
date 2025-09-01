@@ -1,0 +1,4 @@
+[submodule "nrlmsis2.1_cpp"]
+	path = nrlmsis2.1_cpp
+	url = https://git.ins.uni-stuttgart.de/roman.krueckel/nrlmsis2.1_cpp
+	branch = main
