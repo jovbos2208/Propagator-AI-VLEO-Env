@@ -9,9 +9,25 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 # Include directories
 include_directories(include)
 
-# Add Eigen library
-find_package(Eigen3 3.3 REQUIRED NO_MODULE)
-include_directories(${EIGEN3_INCLUDE_DIR})
+# Add Eigen library (prefer config, fallback to header-only include)
+find_package(Eigen3 3.3 QUIET NO_MODULE)
+if(NOT TARGET Eigen3::Eigen)
+  # Fallback: try to find headers only
+  find_path(EIGEN3_INCLUDE_DIR
+            NAMES Eigen/Dense
+            HINTS $ENV{EIGEN3_INCLUDE_DIR}
+            PATH_SUFFIXES eigen3
+            PATHS
+              /usr/include
+              /usr/local/include
+              /opt/homebrew/include
+              /opt/include)
+  if(NOT EIGEN3_INCLUDE_DIR)
+    message(FATAL_ERROR "Eigen3 not found. Install eigen3-devel or set EIGEN3_INCLUDE_DIR to the directory that contains Eigen/Dense.")
+  endif()
+  add_library(Eigen3::Eigen INTERFACE IMPORTED)
+  set_target_properties(Eigen3::Eigen PROPERTIES INTERFACE_INCLUDE_DIRECTORIES "${EIGEN3_INCLUDE_DIR}")
+endif()
 
 # Fortran-based NRLMSIS2.1 library
 enable_language(Fortran)
