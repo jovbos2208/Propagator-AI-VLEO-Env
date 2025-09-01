@@ -92,6 +92,32 @@ int env_load_config(EnvHandle* h, const char* json_path) {
     if (find_number(js, "f107a", tmp)) cfg.space_weather.f107a = (float)tmp;
     if (find_number(js, "f107", tmp)) cfg.space_weather.f107 = (float)tmp;
     find_array7(js, "ap", cfg.space_weather.ap);
+
+    // Optional geometry overrides via JSON (file paths)
+    // Keys (strings): geometry_dir, main_body_obj, wing_right_obj, wing_top_obj, wing_left_obj, wing_bottom_obj
+    std::string geom_dir;
+    find_string(js, "geometry_dir", geom_dir);
+    auto make_path = [&](const std::string& p){
+        if (p.empty()) return p;
+        // Prepend geometry_dir for relative paths
+        if (!geom_dir.empty()) {
+            if (!(p.size() > 0 && (p[0] == '/'
+#ifdef _WIN32
+                  || (p.size() > 1 && p[1] == ':')
+#endif
+                ))) {
+                return geom_dir + "/" + p;
+            }
+        }
+        return p;
+    };
+    std::string f0, f1, f2, f3, f4;
+    bool any_geom = false;
+    if (find_string(js, "main_body_obj", f0)) { cfg.geometry.object_files[0] = make_path(f0); any_geom = true; }
+    if (find_string(js, "wing_right_obj", f1)) { cfg.geometry.object_files[1] = make_path(f1); any_geom = true; }
+    if (find_string(js, "wing_top_obj", f2)) { cfg.geometry.object_files[2] = make_path(f2); any_geom = true; }
+    if (find_string(js, "wing_left_obj", f3)) { cfg.geometry.object_files[3] = make_path(f3); any_geom = true; }
+    if (find_string(js, "wing_bottom_obj", f4)) { cfg.geometry.object_files[4] = make_path(f4); any_geom = true; }
     h->env.init(cfg);
     return 0;
 }
@@ -148,4 +174,3 @@ int env_step_substeps(EnvHandle* h, ControlsC uc, int substeps, StepResultC* out
     copy_step(sr, out_step);
     return 0;
 }
-

@@ -2,6 +2,7 @@
 #include <array>
 #include <cmath>
 #include <mutex>
+#include <filesystem>
 
 extern "C" {
 void msis_init(const char *path, const char *filename);
@@ -48,7 +49,27 @@ static int day_of_year(int y, int m, int d) {
 static void ensure_init() {
     static std::once_flag once;
     std::call_once(once, [](){
-        msis_init("./Fortran/", "msis21.parm");
+        const char* fname = "msis21.parm";
+        const char* dirs[] = {
+            "./Fortran/",
+            "cpp/build/Fortran/",
+            "cpp/build/nrlmsis_fortran/",
+            "build/Fortran/",
+            "build/nrlmsis_fortran/"
+        };
+        bool inited = false;
+        for (auto d : dirs) {
+            std::string cand = std::string(d) + fname;
+            if (std::filesystem::exists(cand)) {
+                msis_init(d, fname);
+                inited = true;
+                break;
+            }
+        }
+        if (!inited) {
+            // best effort default
+            msis_init("./Fortran/", fname);
+        }
     });
 }
 

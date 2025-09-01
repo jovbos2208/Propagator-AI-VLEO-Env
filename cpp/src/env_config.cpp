@@ -23,15 +23,25 @@ static std::string resolve_example_path_impl(const std::string& name) {
     return name; // best effort
 }
 
+static std::string choose_first_existing(const std::initializer_list<const char*>& names) {
+    for (auto* n : names) {
+        std::string p = resolve_example_path_impl(n);
+        if (std::filesystem::exists(p)) return p;
+    }
+    // Return first resolved even if not existing (vleo-aero tools may create later)
+    auto it = names.begin();
+    return resolve_example_path_impl(*it);
+}
+
 GeometryConfig ShuttlecockDefaults::geometry() {
     GeometryConfig cfg;
     // Files order must match hinge/axis columns: [MainBody, WingRight, WingTop, WingLeft, WingBottom]
     cfg.object_files = {
-        resolve_example_path_impl("MainBody.obj"),
-        resolve_example_path_impl("WingRight.obj"),
-        resolve_example_path_impl("WingTop.obj"),
-        resolve_example_path_impl("WingLeft.obj"),
-        resolve_example_path_impl("WingBottom.obj"),
+        choose_first_existing({"MainBody.obj", "shuttle_box.obj", "box.obj", "cube.obj"}),
+        choose_first_existing({"WingRight.obj", "wing_right.obj", "wing_pos_x.obj"}),
+        choose_first_existing({"WingTop.obj", "wing_pos_y.obj"}),
+        choose_first_existing({"WingLeft.obj", "wing_left.obj", "wing_neg_x.obj"}),
+        choose_first_existing({"WingBottom.obj", "wing_neg_y.obj"}),
     };
 
     cfg.hinge_points_CAD.resize(3, 5);
@@ -56,4 +66,3 @@ GeometryConfig ShuttlecockDefaults::geometry() {
 }
 
 } // namespace vleo_aerodynamics_core
-

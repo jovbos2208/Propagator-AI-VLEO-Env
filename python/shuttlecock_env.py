@@ -70,13 +70,18 @@ class ShuttlecockEnvC:
 
         self.h = self.lib.env_create()
         if config_path is not None:
-            rc = self.lib.env_load_config(self.h, config_path.encode("utf-8"))
+            if isinstance(config_path, bytes):
+                path_b = config_path
+            else:
+                path_b = str(config_path).encode("utf-8")
+            rc = self.lib.env_load_config(self.h, path_b)
             if rc != 0:
                 raise RuntimeError(f"Failed to load config: {config_path}")
         self.lib.env_set_align_to_velocity(self.h, 1 if align_to_velocity else 0)
         self.lib.env_set_integrator(self.h, 0 if integrator.lower()=="rk4" else 1)
         if debug_csv:
-            self.lib.env_set_debug_csv(self.h, debug_csv.encode("utf-8"))
+            dbg_b = debug_csv if isinstance(debug_csv, bytes) else str(debug_csv).encode("utf-8")
+            self.lib.env_set_debug_csv(self.h, dbg_b)
 
     def __del__(self):
         try:
@@ -146,4 +151,3 @@ class GymWrapper:
             *obs.r_eci, *obs.v_eci, *obs.q_BI, *obs.w_B,
             obs.altitude_m, obs.rho, obs.aoa_rad, obs.aos_rad, obs.roll_rad
         ], dtype=np.float64)
-
