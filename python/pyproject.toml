@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "shuttlecock-env"
+version = "0.1.0"
+description = "ctypes wrapper for the Shuttlecock C++ environment"
+requires-python = ">=3.9"
+dependencies = [
+  "numpy",
+  "gymnasium",
+  "stable-baselines3",
+]
+
