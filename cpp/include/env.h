@@ -84,9 +84,19 @@ private:
     RewardTerms compute_reward(const Observation& obs, const Controls& u) const;
     bool check_done(const Observation& obs) const;
 
+    // Atmosphere sampling with optional caching
+    AtmoOut sample_atmo_cached(double jd_utc, double lat_deg, double lon_deg, double alt_km);
+
 
     IntegratorType integrator_ = IntegratorType::RK4;
     DP54Params dp54_params_{};
+
+    // Cache state for atmosphere
+    AtmoOut last_atmo_{};
+    double last_atmo_jd_ = -1.0;
+    double last_lat_deg_ = 1e9;
+    double last_lon_deg_ = 1e9;
+    double last_alt_m_ = 1e9;
 };
 
 } // namespace vleo_aerodynamics_core

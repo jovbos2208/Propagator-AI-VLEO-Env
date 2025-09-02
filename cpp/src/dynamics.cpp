@@ -42,9 +42,9 @@ Deriv dynamics_deriv(const State& x,
     Deriv d;
     d.rdot = x.v_eci;
 
-    // Frames
-    Eigen::Matrix3d R_EI = R_ECEF_to_ECI(atmo.jd_utc); // ECEF->ECI
+    // Frames (compute once; use transpose for inverse)
     Eigen::Matrix3d R_IE = R_ECI_to_ECEF(atmo.jd_utc); // ECI->ECEF
+    Eigen::Matrix3d R_EI = R_IE.transpose();           // ECEF->ECI
     Eigen::Matrix3d R_BI = R_BI_from_quat(x.q_BI);
     Eigen::Matrix3d R_IB = R_IB_from_quat(x.q_BI);
 
@@ -80,4 +80,3 @@ Deriv dynamics_deriv(const State& x,
 }
 
 } // namespace vleo_aerodynamics_core
-

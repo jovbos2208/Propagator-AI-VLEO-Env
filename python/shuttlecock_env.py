@@ -67,6 +67,8 @@ class ShuttlecockEnvC:
         self.lib.env_reset_random.argtypes = [C.POINTER(EnvHandle), c_uint64, c_double, C.POINTER(ObsC)]
         self.lib.env_step_duration.argtypes = [C.POINTER(EnvHandle), ControlsC, c_double, C.POINTER(StepResultC)]
         self.lib.env_step_substeps.argtypes = [C.POINTER(EnvHandle), ControlsC, c_int, C.POINTER(StepResultC)]
+        self.lib.env_estimate_period_s.argtypes = [C.POINTER(EnvHandle)]
+        self.lib.env_estimate_period_s.restype = c_double
 
         self.h = self.lib.env_create()
         if config_path is not None:
@@ -113,14 +115,18 @@ class ShuttlecockEnvC:
             raise RuntimeError("env_step_substeps failed")
         return sr
 
+    def estimate_period_s(self) -> float:
+        return float(self.lib.env_estimate_period_s(self.h))
+
 
 # Example Gymnasium-style wrapper (minimal, single-agent, continuous actions)
 class GymWrapper:
-    def __init__(self, envc: ShuttlecockEnvC, control_dt=5.0, use_substeps=False, substeps=20):
+    def __init__(self, envc: ShuttlecockEnvC, control_dt=5.0, use_substeps=False, substeps=20, per_orbit_steps: int | None = None):
         self.envc = envc
         self.control_dt = control_dt
         self.use_substeps = use_substeps
         self.substeps = substeps
+        self.per_orbit_steps = per_orbit_steps
 
     def reset(self, seed=0, jd0_utc=2451545.0):
         obs = self.envc.reset_random(seed, jd0_utc)
@@ -131,7 +137,12 @@ class GymWrapper:
         if self.use_substeps:
             sr = self.envc.step_substeps(eta1, eta2, thrust, self.substeps)
         else:
-            sr = self.envc.step_duration(eta1, eta2, thrust, self.control_dt)
+            if self.per_orbit_steps and self.per_orbit_steps > 0:
+                T = max(1e-6, self.envc.estimate_period_s())
+                dt = max(1e-3, T / float(self.per_orbit_steps))
+                sr = self.envc.step_duration(eta1, eta2, thrust, dt)
+            else:
+                sr = self.envc.step_duration(eta1, eta2, thrust, self.control_dt)
         obs = self._obs_to_np(sr.obs)
         reward = sr.R_total
         terminated = bool(sr.done)
@@ -147,8 +158,8 @@ class GymWrapper:
     @staticmethod
     def _obs_to_np(obs: ObsC):
         import numpy as np
-        # Flatten a reasonable observation vector for RL
+        # Flatten a reasonable observation vector for RL (float32 for SB3 efficiency)
         return np.array([
             *obs.r_eci, *obs.v_eci, *obs.q_BI, *obs.w_B,
             obs.altitude_m, obs.rho, obs.aoa_rad, obs.aos_rad, obs.roll_rad
-        ], dtype=np.float64)
+        ], dtype=np.float32)

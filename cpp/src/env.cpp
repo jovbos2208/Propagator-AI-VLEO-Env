@@ -8,10 +8,12 @@ namespace vleo_aerodynamics_core {
 static Observation build_obs(const State& x, double jd_utc, const AtmoSample& atmo) {
     Observation o;
     o.r_eci = x.r_eci; o.v_eci = x.v_eci; o.q_BI = x.q_BI; o.w_B = x.w_B;
-    Eigen::Vector3d r_ecef = R_ECI_to_ECEF(jd_utc) * x.r_eci;
+    Eigen::Matrix3d R_IE = R_ECI_to_ECEF(jd_utc);
+    Eigen::Matrix3d R_EI = R_IE.transpose();
+    Eigen::Vector3d r_ecef = R_IE * x.r_eci;
     double lat, lon, alt; ecef_to_geodetic(r_ecef, lat, lon, alt);
     o.altitude_m = alt; o.rho = atmo.rho;
-    Eigen::Vector3d wind_I = R_ECEF_to_ECI(jd_utc) * atmo.wind_ecef;
+    Eigen::Vector3d wind_I = R_EI * atmo.wind_ecef;
     Eigen::Vector3d Vrel_I = x.v_eci - Eigen::Vector3d(0,0,OMEGA_EARTH).cross(x.r_eci) - wind_I;
     Eigen::Vector3d Vrel_B = x.q_BI * Vrel_I; // transform to body
     compute_aoa_aos(Vrel_B, o.aoa_rad, o.aos_rad);
@@ -61,15 +63,15 @@ Observation PropEnv::reset(double jd0_utc) {
     remaining_impulse_Ns_ = cfg_.total_impulse_budget_Ns;
 
     // Initial atmosphere sample
-    Eigen::Vector3d r_ecef = R_ECI_to_ECEF(jd_utc_) * state_.r_eci;
+    Eigen::Matrix3d R_IE0 = R_ECI_to_ECEF(jd_utc_);
+    Eigen::Matrix3d R_EI0 = R_IE0.transpose();
+    Eigen::Vector3d r_ecef = R_IE0 * state_.r_eci;
     double lat, lon, alt_m; ecef_to_geodetic(r_ecef, lat, lon, alt_m);
-    AtmoOut out;
-    nrlmsis_eval_with_sw(jd_utc_, lat*180.0/M_PI, lon*180.0/M_PI, alt_m/1000.0,
-                         cfg_.space_weather.f107a, cfg_.space_weather.f107, cfg_.space_weather.ap, &out);
+    AtmoOut out = sample_atmo_cached(jd_utc_, lat*180.0/M_PI, lon*180.0/M_PI, alt_m/1000.0);
     AtmoSample atmo; atmo.jd_utc = jd_utc_; atmo.rho = out.rho_kg_m3; atmo.T_K = out.T_K; atmo.wind_ecef = out.wind_ecef; atmo.particles_mass_kg = out.mean_molecular_mass_kg;
     // Optionally align attitude to initial relative velocity
     if (cfg_.align_attitude_to_velocity) {
-        Eigen::Vector3d wind_I = R_ECEF_to_ECI(jd_utc_) * atmo.wind_ecef;
+        Eigen::Vector3d wind_I = R_EI0 * atmo.wind_ecef;
         Eigen::Vector3d Vrel_I = state_.v_eci - Eigen::Vector3d(0,0,OMEGA_EARTH).cross(state_.r_eci) - wind_I;
         Eigen::Vector3d t = Vrel_I.normalized();
         Eigen::Vector3d ref = Eigen::Vector3d::UnitZ();
@@ -122,11 +124,10 @@ Observation PropEnv::reset_random(uint64_t seed, double jd0_utc) {
     q_ref_ = state_.q_BI;
     remaining_impulse_Ns_ = cfg_.total_impulse_budget_Ns;
 
-    Eigen::Vector3d r_ecef = R_ECI_to_ECEF(jd_utc_) * state_.r_eci;
+    Eigen::Matrix3d R_IEr = R_ECI_to_ECEF(jd_utc_);
+    Eigen::Vector3d r_ecef = R_IEr * state_.r_eci;
     double lat, lon, alt_m2; ecef_to_geodetic(r_ecef, lat, lon, alt_m2);
-    AtmoOut out;
-    nrlmsis_eval_with_sw(jd_utc_, lat*180.0/M_PI, lon*180.0/M_PI, alt_m2/1000.0,
-                         cfg_.space_weather.f107a, cfg_.space_weather.f107, cfg_.space_weather.ap, &out);
+    AtmoOut out = sample_atmo_cached(jd_utc_, lat*180.0/M_PI, lon*180.0/M_PI, alt_m2/1000.0);
     AtmoSample atmo; atmo.jd_utc = jd_utc_; atmo.rho = out.rho_kg_m3; atmo.T_K = out.T_K; atmo.wind_ecef = out.wind_ecef; atmo.particles_mass_kg = out.mean_molecular_mass_kg;
     // Optionally align attitude to initial relative velocity
     if (cfg_.align_attitude_to_velocity) {
@@ -153,6 +154,35 @@ Observation PropEnv::make_observation(const AtmoSample& atmo) const {
 }
 
 static double wrap_pi(double a){ while (a> M_PI) a-=2*M_PI; while (a<-M_PI) a+=2*M_PI; return a; }
+
+AtmoOut PropEnv::sample_atmo_cached(double jd_utc, double lat_deg, double lon_deg, double alt_km) {
+    // Decide whether to reuse cache
+    bool use_cache = false;
+    if (cfg_.atmo_cache_period_s > 0.0 && last_atmo_jd_ > 0.0) {
+        double age_s = (jd_utc - last_atmo_jd_) * 86400.0;
+        double dlat = std::abs(lat_deg - last_lat_deg_);
+        double dlon = std::abs(lon_deg - last_lon_deg_);
+        double dalt_m = std::abs(alt_km*1000.0 - last_alt_m_);
+        if (age_s <= cfg_.atmo_cache_period_s &&
+            dalt_m <= cfg_.atmo_cache_alt_tol_m &&
+            dlat <= cfg_.atmo_cache_latlon_tol_deg &&
+            dlon <= cfg_.atmo_cache_latlon_tol_deg) {
+            use_cache = true;
+        }
+    }
+    if (use_cache) {
+        return last_atmo_;
+    }
+    AtmoOut out;
+    nrlmsis_eval_with_sw(jd_utc, (float)lat_deg, (float)lon_deg, (float)alt_km,
+                         cfg_.space_weather.f107a, cfg_.space_weather.f107, cfg_.space_weather.ap, &out);
+    last_atmo_ = out;
+    last_atmo_jd_ = jd_utc;
+    last_lat_deg_ = lat_deg;
+    last_lon_deg_ = lon_deg;
+    last_alt_m_ = alt_km*1000.0;
+    return out;
+}
 
 RewardTerms PropEnv::compute_reward(const Observation& obs, const Controls& u) const {
     // Tracking terms based on AoA/AoS and altitude
@@ -183,9 +213,7 @@ StepResult PropEnv::step(const Controls& action, double& dt) {
     // Atmosphere sample at current state
     Eigen::Vector3d r_ecef = R_ECI_to_ECEF(jd_utc_) * state_.r_eci;
     double lat, lon, alt_m; ecef_to_geodetic(r_ecef, lat, lon, alt_m);
-    AtmoOut out;
-    nrlmsis_eval_with_sw(jd_utc_, lat*180.0/M_PI, lon*180.0/M_PI, alt_m/1000.0,
-                         cfg_.space_weather.f107a, cfg_.space_weather.f107, cfg_.space_weather.ap, &out);
+    AtmoOut out = sample_atmo_cached(jd_utc_, lat*180.0/M_PI, lon*180.0/M_PI, alt_m/1000.0);
     AtmoSample atmo; atmo.jd_utc = jd_utc_; atmo.rho = out.rho_kg_m3; atmo.T_K = out.T_K; atmo.wind_ecef = out.wind_ecef; atmo.particles_mass_kg = out.mean_molecular_mass_kg;
 
     // Integrate
@@ -234,9 +262,7 @@ StepResult PropEnv::step_orbit(const Controls& action) {
         // Atmosphere sample
         Eigen::Vector3d r_ecef = R_ECI_to_ECEF(jd_utc_) * state_.r_eci;
         double lat, lon, alt_m; ecef_to_geodetic(r_ecef, lat, lon, alt_m);
-        AtmoOut out;
-        nrlmsis_eval_with_sw(jd_utc_, lat*180.0/M_PI, lon*180.0/M_PI, alt_m/1000.0,
-                             cfg_.space_weather.f107a, cfg_.space_weather.f107, cfg_.space_weather.ap, &out);
+        AtmoOut out = sample_atmo_cached(jd_utc_, lat*180.0/M_PI, lon*180.0/M_PI, alt_m/1000.0);
         AtmoSample atmo; atmo.jd_utc = jd_utc_; atmo.rho = out.rho_kg_m3; atmo.T_K = out.T_K; atmo.wind_ecef = out.wind_ecef; atmo.particles_mass_kg = out.mean_molecular_mass_kg;
 
         if (debug_enabled_) {

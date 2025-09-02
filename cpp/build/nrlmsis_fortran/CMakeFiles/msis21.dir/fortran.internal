@@ -1,0 +1,10 @@
+# The fortran modules provided by this target.
+provides
+ msis_calc.mod
+ msis_constants.mod
+ msis_dfn.mod
+ msis_gfn.mod
+ msis_init.mod
+ msis_tfn.mod
+ msis_utils.mod
+ string_utils.mod

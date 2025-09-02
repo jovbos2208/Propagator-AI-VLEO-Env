@@ -79,6 +79,11 @@ struct EnvConfig {
     double dp54_min_dt = 1e-4;
     double dp54_max_dt = 10.0;
     double dp54_safety = 0.9;
+    // Atmosphere sampling cache (disabled by default)
+    // If period > 0, reuse NRLMSIS results for up to this duration and small geo changes
+    double atmo_cache_period_s = 0.0;      // max age of cache in seconds (0 => disabled)
+    double atmo_cache_alt_tol_m = 0.0;     // altitude tolerance for cache reuse
+    double atmo_cache_latlon_tol_deg = 0.0;// lat/lon tolerance for cache reuse
     // Rewards
     double w_alt = 1e-6; // per meter (tracking)
     double w_att_ao = 1.0; // AoA/AoS tracking weight

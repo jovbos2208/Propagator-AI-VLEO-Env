@@ -10,7 +10,6 @@ AeroForceAndTorque calcAeroForceAndTorque(const std::vector<double>& areas,
                                           const std::vector<Eigen::Vector3d>& normals,
                                           const std::vector<Eigen::Vector3d>& centroids,
                                           const std::vector<Eigen::Vector3d>& v_rels,
-                                          const std::vector<double>& deltas,
                                           double density,
                                           double gas_temperature,
                                           const std::vector<double>& surface_temperatures,
@@ -23,15 +22,22 @@ AeroForceAndTorque calcAeroForceAndTorque(const std::vector<double>& areas,
 
     double cm = sqrt(2.0 * KB * gas_temperature / particles_mass);
 
+    const double inv_sqrt_pi = 1.0 / std::sqrt(M_PI);
     for (size_t i = 0; i < areas.size(); ++i) {
         double V = v_rels[i].norm();
+        if (V <= 1e-12) {
+            continue; // no relative flow => no aero force
+        }
         double s = V / cm;
-        double cosdelta = cos(deltas[i]);
+        // cos(delta) = -v_hat dot n
+        Eigen::Vector3d vhat = v_rels[i] / V;
+        double cosdelta = -vhat.dot(normals[i]);
         double scosdelta = s * cosdelta;
 
-        double erfcterm = erfc(-scosdelta);
-        double G1 = scosdelta / sqrt(M_PI) * exp(-scosdelta * scosdelta) + (0.5 + scosdelta * scosdelta) * erfcterm;
-        double G2 = 1.0 / sqrt(M_PI) * exp(-scosdelta * scosdelta) + scosdelta * erfcterm;
+        double e = std::exp(-scosdelta * scosdelta);
+        double erfcterm = std::erfc(-scosdelta);
+        double G1 = scosdelta * inv_sqrt_pi * e + (0.5 + scosdelta * scosdelta) * erfcterm;
+        double G2 = inv_sqrt_pi * e + scosdelta * erfcterm;
 
         double T_rat;
         switch (temperature_ratio_method) {
@@ -51,7 +57,7 @@ AeroForceAndTorque calcAeroForceAndTorque(const std::vector<double>& areas,
                 throw std::runtime_error("Invalid temperature ratio method");
         }
 
-        Eigen::Vector3d p = density / 2.0 * cm * cm * (-(G1 + sqrt(M_PI) / 2.0 * sqrt(T_rat) * G2) * normals[i] + s * G2 * (v_rels[i] / V + cosdelta * normals[i]));
+        Eigen::Vector3d p = density / 2.0 * cm * cm * (-(G1 + std::sqrt(M_PI) / 2.0 * std::sqrt(T_rat) * G2) * normals[i] + s * G2 * (vhat + cosdelta * normals[i]));
 
         Eigen::Vector3d force = p * areas[i];
         Eigen::Vector3d torque = centroids[i].cross(force);

@@ -92,6 +92,10 @@ int env_load_config(EnvHandle* h, const char* json_path) {
     if (find_number(js, "f107a", tmp)) cfg.space_weather.f107a = (float)tmp;
     if (find_number(js, "f107", tmp)) cfg.space_weather.f107 = (float)tmp;
     find_array7(js, "ap", cfg.space_weather.ap);
+    // Optional atmosphere cache controls
+    if (find_number(js, "atmo_cache_period_s", tmp)) cfg.atmo_cache_period_s = tmp;
+    if (find_number(js, "atmo_cache_alt_tol_m", tmp)) cfg.atmo_cache_alt_tol_m = tmp;
+    if (find_number(js, "atmo_cache_latlon_tol_deg", tmp)) cfg.atmo_cache_latlon_tol_deg = tmp;
 
     // Optional geometry overrides via JSON (file paths)
     // Keys (strings): geometry_dir, main_body_obj, wing_right_obj, wing_top_obj, wing_left_obj, wing_bottom_obj
@@ -173,4 +177,9 @@ int env_step_substeps(EnvHandle* h, ControlsC uc, int substeps, StepResultC* out
     StepResult sr = h->env.step_substeps(to_controls(uc), substeps);
     copy_step(sr, out_step);
     return 0;
+}
+
+double env_estimate_period_s(EnvHandle* h) {
+    if (!h) return 0.0;
+    return h->env.estimate_period_s();
 }

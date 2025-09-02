@@ -48,9 +48,10 @@ std::vector<bool> determineShadowedTriangles(const Eigen::Matrix3Xd& vertices,
     std::vector<bool> ind_shadowable(num_triangles);
     std::vector<bool> ind_shadowing(num_triangles);
     for (int i = 0; i < num_triangles; ++i) {
-        double delta = acos(-dir.dot(normals[i]));
-        ind_shadowable[i] = (delta <= M_PI / 2.0);
-        ind_shadowing[i] = !ind_shadowable[i];
+        // Front-facing if dir·n <= 0 (avoids costly acos)
+        bool front_facing = (dir.dot(normals[i]) <= 0.0);
+        ind_shadowable[i] = front_facing;
+        ind_shadowing[i] = !front_facing;
     }
 
     // 2nd Reduction
@@ -122,19 +123,16 @@ std::vector<bool> determineShadowedTriangles(const Eigen::Matrix3Xd& vertices,
             }
 
             if (!current_shadowing_indices.empty()) {
-                std::vector<Eigen::MatrixXd> vertices_proj;
+                std::vector<Eigen::Matrix<double,2,3>> vertices_proj;
                 for (int j : current_shadowing_indices) {
-                    Eigen::MatrixXd temp_vertices_centered = vertices.block(0, 3 * j, 3, 3);
+                    Eigen::Matrix<double,3,3> temp_vertices_centered = vertices.block(0, 3 * j, 3, 3);
                     temp_vertices_centered.colwise() -= centroids[i];
-                    Eigen::MatrixXd proj_vertices = perp_axes.transpose() * temp_vertices_centered; // 2x3
-                    if (proj_vertices.rows() != 2 || proj_vertices.cols() != 3) {
-                        throw std::runtime_error("Projected vertices matrix has unexpected dimensions.");
-                    }
+                    Eigen::Matrix<double,2,3> proj_vertices = perp_axes.transpose() * temp_vertices_centered; // 2x3
                     vertices_proj.push_back(proj_vertices);
                 }
 
                 // 4th Reduction
-                std::vector<Eigen::MatrixXd> remaining_vertices_proj;
+                std::vector<Eigen::Matrix<double,2,3>> remaining_vertices_proj;
                 for (const auto& proj_verts : vertices_proj) {
                     int sx0 = sgn(proj_verts(0, 0));
                     int sx1 = sgn(proj_verts(0, 1));
@@ -154,8 +152,30 @@ std::vector<bool> determineShadowedTriangles(const Eigen::Matrix3Xd& vertices,
                 }
 
                 if (!remaining_vertices_proj.empty()) {
-                    if (checkOriginInAnyTriangle(remaining_vertices_proj)) {
-                        ind_shadowed[i] = true;
+                    // Inline check to early-exit when origin is inside any projected triangle
+                    for (const auto& triangle_vertices : remaining_vertices_proj) {
+                        Eigen::Vector2d a = triangle_vertices.col(0);
+                        Eigen::Vector2d b = triangle_vertices.col(1);
+                        Eigen::Vector2d c = triangle_vertices.col(2);
+
+                        Eigen::Vector2d v0 = b - a;
+                        Eigen::Vector2d v1 = c - a;
+                        Eigen::Vector2d v2 = -a;
+
+                        double d00 = v0.dot(v0);
+                        double d01 = v0.dot(v1);
+                        double d11 = v1.dot(v1);
+                        double d20 = v2.dot(v0);
+                        double d21 = v2.dot(v1);
+
+                        double invDenom = 1.0 / (d00 * d11 - d01 * d01);
+                        double u = (d11 * d20 - d01 * d21) * invDenom;
+                        double v = (d00 * d21 - d01 * d20) * invDenom;
+
+                        if ((u >= 0) && (v >= 0) && (u + v <= 1)) {
+                            ind_shadowed[i] = true;
+                            break;
+                        }
                     }
                 }
             }

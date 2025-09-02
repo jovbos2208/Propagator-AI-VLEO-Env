@@ -60,9 +60,11 @@ int env_reset_random(EnvHandle* h, uint64_t seed, double jd0_utc, ObsC* out_obs)
 int env_step_duration(EnvHandle* h, ControlsC u, double duration_s, StepResultC* out_step);
 int env_step_substeps(EnvHandle* h, ControlsC u, int substeps, StepResultC* out_step);
 
+// Utility: estimate current orbital period [s]
+double env_estimate_period_s(EnvHandle* h);
+
 #ifdef __cplusplus
 }
 #endif
 
 #endif // SHUTTLECOCK_C_API_H
-

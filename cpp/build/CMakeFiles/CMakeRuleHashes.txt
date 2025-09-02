@@ -1,0 +1,2 @@
+# Hashes of file build rules.
+922d4fc821312ee36b2af3290a12d302 external/tinyobjloader/CMakeFiles/uninstall
