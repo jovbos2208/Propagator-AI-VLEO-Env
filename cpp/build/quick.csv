@@ -1,2 +1,0 @@
-episode,orbit,integrator,dt,eta1,eta2,thrust,rem_impulse,substeps,R_total,R_alt,R_att,R_spin,R_effort,dwell_alt_frac,dwell_att_frac,altitude,AoA,AoS,roll
-0,0,dp54,1,0,0,0,0,28106,-3.5396,-0.0178995,-3.61088,0,0,0.080829,0.00835611,279256,0.0846025,0.0872367,-1.65969
