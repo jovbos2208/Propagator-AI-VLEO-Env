@@ -45,6 +45,7 @@ def main():
     ap.add_argument("--tb-logdir", default=None, help="TensorBoard log directory (enables TB logging)")
     ap.add_argument("--log-interval", type=int, default=1000, help="Training log interval (SB3)")
     ap.add_argument("--no-progress", action="store_true", help="Disable tqdm progress bar during training")
+    ap.add_argument("--mp-start-method", default="spawn", choices=["spawn", "fork", "forkserver"], help="Multiprocessing start method for SubprocVecEnv")
     args = ap.parse_args()
 
     with open(args.config, "r") as f:
@@ -55,7 +56,18 @@ def main():
     use_shuttle = bool(args.use_shuttlecock or auto_shuttle)
 
     if args.num_envs > 1:
-        env = SubprocVecEnv([make_env(cfg, use_shuttle, args.shuttle_config) for _ in range(args.num_envs)])
+        # Avoid CPU oversubscription: force 1 thread per process
+        os.environ.setdefault("OMP_NUM_THREADS", "1")
+        os.environ.setdefault("MKL_NUM_THREADS", "1")
+        os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+        os.environ.setdefault("NUMEXPR_NUM_THREADS", "1")
+        try:
+            import torch
+            torch.set_num_threads(1)
+            torch.set_num_interop_threads(1)
+        except Exception:
+            pass
+        env = SubprocVecEnv([make_env(cfg, use_shuttle, args.shuttle_config) for _ in range(args.num_envs)], start_method=args.mp_start_method)
     else:
         env = DummyVecEnv([make_env(cfg, use_shuttle, args.shuttle_config)])
 
