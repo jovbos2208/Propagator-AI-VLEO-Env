@@ -1,0 +1,17 @@
+env:
+  mode: attitude_only
+  dt: 1.0
+  frame_stack: 1
+  obs_scales: {theta_deg: 20.0, omega: 0.1}
+  a_max: 0.0
+  tau_max: 0.01
+  max_att_err_deg: 60
+
+reward_weights:
+  w_theta: 1.2
+  w_omega: 0.3
+  w_h: 0.1
+  w_dv_cmd: 0.0
+  fail: -50.0
+  goal: 5.0
+

@@ -1,0 +1,18 @@
+env:
+  mode: orbit_only
+  dt: 1.0
+  frame_stack: 1
+  obs_scales: {dr: 5000.0, dv: 0.1, da: 100.0, e: 0.01}
+  a_max: 1.0e-4
+  tau_max: 0.0
+  min_perigee_km: 180
+
+reward_weights:
+  w_a: 1.0
+  w_e: 0.5
+  w_dr: 0.2
+  w_dv: 0.2
+  w_dv_cmd: 0.02
+  fail: -50.0
+  goal: 5.0
+
