@@ -182,6 +182,7 @@ class RLSatEnv(gym.Env):
             "a_cmd_mps2": a_cmd,
             "tau_cmd_nm": tau_cmd,
             "cum_dv_mps": float(self._cum_dv),
+            "t_s": float(getattr(ps, "t", 0.0)),
         }
 
     def _estimate_period(self, ps: PropagatorState) -> float:

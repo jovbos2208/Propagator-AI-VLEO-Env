@@ -17,7 +17,7 @@ if str(SRC_DIR) not in sys.path:
 from rl_sat.envs.satellite_env import RLSatEnv
 from rl_sat.sim.interfaces import DummyPropagator
 from rl_sat.sim.shuttlecock_adapter import ShuttlecockPropagator
-from .callbacks import ProgressBarCallback
+from .callbacks import ProgressBarCallback, EvalEveryOrbitsTB
 
 
 def make_env(cfg: dict, use_shuttle: bool, shuttle_cfg_path: str | None):
@@ -66,6 +66,10 @@ def main():
     callbacks = []
     if not args.no_progress:
         callbacks.append(ProgressBarCallback(total=args.total_steps, desc="PPO"))
+    # Eval every 10 orbits and log to TB
+    def make_eval_env():
+        return DummyVecEnv([make_env(cfg, use_shuttle, args.shuttle_config)])
+    callbacks.append(EvalEveryOrbitsTB(make_eval_env, cfg, orbits_interval=10))
     learn_kwargs = dict(total_timesteps=args.total_steps, log_interval=args.log_interval)
     if args.tb_logdir:
         learn_kwargs.update(tb_log_name="ppo_rlsat")
