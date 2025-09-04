@@ -53,7 +53,8 @@ class ShuttlecockPropagator(PropagatorInterface):
                  tau_max: float = 0.01,
                  debug_print: bool = False):
         from python.shuttlecock_env import ShuttlecockEnvC  # lazy import
-        self.envc = ShuttlecockEnvC(config_path=config_path.encode("utf-8"), align_to_velocity=True, integrator="dp54")
+        dbg_csv = b"runs/shuttle_debug.csv" if debug_print else None
+        self.envc = ShuttlecockEnvC(config_path=config_path.encode("utf-8"), align_to_velocity=True, integrator="dp54", debug_csv=dbg_csv)
         self.control_dt = float(control_dt)
         self.use_substeps = bool(use_substeps)
         self.substeps = int(substeps)

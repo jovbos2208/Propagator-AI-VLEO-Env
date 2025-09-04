@@ -74,6 +74,7 @@ int env_load_config(EnvHandle* h, const char* json_path) {
     if (find_number(js, "incl_min_deg", tmp)) cfg.init_incl_min_rad = tmp * M_PI/180.0;
     if (find_number(js, "incl_max_deg", tmp)) cfg.init_incl_max_rad = tmp * M_PI/180.0;
     if (find_number(js, "target_altitude", tmp)) cfg.target_altitude_m = tmp;
+    if (find_number(js, "mass_kg", tmp)) cfg.mass_props.mass_kg = tmp;
     if (find_number(js, "eta_limit_deg", tmp)) cfg.eta_limit_rad = tmp * M_PI/180.0;
     if (find_number(js, "thrust_min", tmp)) cfg.thrust_min_N = tmp;
     if (find_number(js, "thrust_max", tmp)) cfg.thrust_max_N = tmp;

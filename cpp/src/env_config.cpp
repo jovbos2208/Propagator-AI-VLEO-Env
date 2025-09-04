@@ -37,10 +37,11 @@ GeometryConfig ShuttlecockDefaults::geometry() {
     GeometryConfig cfg;
     // Files order must match hinge/axis columns: [MainBody, WingRight, WingTop, WingLeft, WingBottom]
     cfg.object_files = {
+        // Prefer small test geometry by default to avoid unrealistic drag
         choose_first_existing({"MainBody.obj", "shuttle_box.obj", "box.obj", "cube.obj"}),
-        choose_first_existing({"WingRight.obj", "wing_right.obj", "wing_pos_x.obj"}),
+        choose_first_existing({"WingRight.obj", "wing_pos_x.obj", "wing_right.obj"}),
         choose_first_existing({"WingTop.obj", "wing_pos_y.obj"}),
-        choose_first_existing({"WingLeft.obj", "wing_left.obj", "wing_neg_x.obj"}),
+        choose_first_existing({"WingLeft.obj", "wing_neg_x.obj", "wing_left.obj"}),
         choose_first_existing({"WingBottom.obj", "wing_neg_y.obj"}),
     };
 

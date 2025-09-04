@@ -54,21 +54,43 @@ def make_env(
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", required=True)
-    ap.add_argument("--num-envs", type=int, default=1)
-    ap.add_argument("--total-steps", type=int, default=1_000_000, help="Total training timesteps across all envs")
-    ap.add_argument("--episode-orbits", type=int, required=True, help="Number of orbits per episode")
-    ap.add_argument("--steps-per-orbit", type=int, required=True, help="Number of actions per orbit")
+    ap.add_argument("--num-envs", type=int, default=-1)
+    ap.add_argument("--total-steps", type=int, default=-1, help="Total training timesteps across all envs")
+    ap.add_argument("--episode-orbits", type=int, default=-1, help="Number of orbits per episode (overrides config)")
+    ap.add_argument("--steps-per-orbit", type=int, default=-1, help="Number of actions per orbit (overrides config)")
+    ap.add_argument(
+        "--update-every-episodes",
+        type=int,
+        default=-1,
+        help="Episodes per env per PPO update (overrides config)",
+    )
+    ap.add_argument("--n-epochs", type=int, default=-1, help="PPO epochs per update (overrides config)")
+    ap.add_argument("--learning-rate", type=float, default=-1.0, help="PPO optimizer learning rate (overrides config)")
     args = ap.parse_args()
 
     with open(args.config, "r") as f:
         cfg = yaml.safe_load(f)
 
-    # Apply episode/orbit overrides
+    # Merge training params from config with CLI overrides
     cfg.setdefault("env", {})
-    cfg["env"]["episode_orbits"] = int(args.episode_orbits)
-    cfg["env"]["per_orbit_steps"] = int(args.steps_per_orbit)
-    # Also enforce fixed episode length in steps to avoid relying on timing
-    cfg["env"]["episode_steps"] = int(args.episode_orbits) * int(args.steps_per_orbit)
+    tcfg = cfg.get("training", {}) or {}
+    # Read values with precedence: CLI override (>0) -> training section -> env defaults
+    episode_orbits = int(args.episode_orbits) if int(args.episode_orbits) > 0 else int(tcfg.get("episode_orbits", cfg["env"].get("episode_orbits", 0) or 0))
+    steps_per_orbit = int(args.steps_per_orbit) if int(args.steps_per_orbit) > 0 else int(tcfg.get("steps_per_orbit", cfg["env"].get("per_orbit_steps", 0) or 0))
+    if episode_orbits <= 0 or steps_per_orbit <= 0:
+        raise ValueError("episode_orbits and steps_per_orbit must be set either via CLI or training section in config")
+    num_envs = int(args.num_envs) if int(args.num_envs) > 0 else int(tcfg.get("num_envs", 1))
+    total_steps = int(args.total_steps) if int(args.total_steps) > 0 else int(tcfg.get("total_steps", 1_000_000))
+    update_every_episodes = int(args.update_every_episodes) if int(args.update_every_episodes) > 0 else int(tcfg.get("update_every_episodes", 1))
+    n_epochs = int(args.n_epochs) if int(args.n_epochs) > 0 else int(tcfg.get("n_epochs", 10))
+    learning_rate = float(args.learning_rate) if float(args.learning_rate) > 0 else float(tcfg.get("learning_rate", 3e-4))
+    tb_dir = str(tcfg.get("tb_logdir", "runs/tb"))
+
+    # Apply to env config
+    cfg["env"]["episode_orbits"] = episode_orbits
+    cfg["env"]["per_orbit_steps"] = steps_per_orbit
+    # Also enforce fixed episode length in steps
+    cfg["env"]["episode_steps"] = episode_orbits * steps_per_orbit
 
     action_type = str(cfg.get("env", {}).get("action_type", "rtn_torque")).lower()
     auto_shuttle = action_type in ("angles_only", "angles_thrust")
@@ -76,7 +98,7 @@ def main():
 
     # episode_steps is derived above; no CLI override
 
-    if args.num_envs > 1:
+    if num_envs > 1:
         # Avoid CPU oversubscription: force 1 thread per process
         os.environ.setdefault("OMP_NUM_THREADS", "1")
         os.environ.setdefault("MKL_NUM_THREADS", "1")
@@ -94,7 +116,7 @@ def main():
                 use_shuttle,
                 "cpp/configs/shuttlecock_250km.json",
             )
-            for _ in range(args.num_envs)
+            for _ in range(num_envs)
         ], start_method="fork")
     else:
         env = DummyVecEnv([
@@ -105,17 +127,33 @@ def main():
             )
         ])
 
+    # Compute PPO rollout length from episodes and envs
+    episode_steps = int(cfg["env"]["episode_steps"]) 
+    episodes_per_update = max(1, int(update_every_episodes))
+    n_steps = max(1, episode_steps * episodes_per_update)
+    # Use full-batch updates by default (one batch per rollout)
+    batch_size = max(1, n_steps * int(num_envs))
+
     # Default TB logging to runs/tb
-    tb_dir = "runs/tb"
-    model = PPO("MlpPolicy", env, verbose=1, tensorboard_log=tb_dir)
+    # TB directory from config (default runs/tb)
+    model = PPO(
+        "MlpPolicy",
+        env,
+        verbose=1,
+        tensorboard_log=tb_dir,
+        n_steps=n_steps,
+        batch_size=batch_size,
+        n_epochs=int(n_epochs),
+        learning_rate=float(learning_rate),
+    )
     callbacks = []
-    callbacks.append(ProgressBarCallback(total=int(args.total_steps), desc="PPO"))
+    callbacks.append(ProgressBarCallback(total=int(total_steps), desc="PPO"))
     callbacks.append(EpisodeEndTB())
     callbacks.append(LogPreActionLLA(every=1))
 
     # Choose a sensible default training horizon if not specified elsewhere
     # Use a very large log_interval so default TB flushes happen via EpisodeEndTB
-    learn_kwargs = dict(total_timesteps=int(args.total_steps), log_interval=10**9, tb_log_name="ppo_rlsat")
+    learn_kwargs = dict(total_timesteps=int(total_steps), log_interval=10**9, tb_log_name="ppo_rlsat")
     model.learn(callback=callbacks if callbacks else None, **learn_kwargs)
 
     os.makedirs("runs", exist_ok=True)
