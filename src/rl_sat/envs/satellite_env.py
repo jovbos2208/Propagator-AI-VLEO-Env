@@ -30,11 +30,27 @@ class RLSatEnv(gym.Env):
         # Tracking for metrics
         self._last_ps: PropagatorState | None = None
         self._cum_dv: float = 0.0
+        # Debug configuration
+        dbg = dict(cfg.get("debug", {}))
+        self._debug_pre = bool(dbg.get("pre_action", False))
+        self._debug_every = max(1, int(dbg.get("every", 1) or 1))
+        self._debug_print = bool(dbg.get("print", True))
+        self._step_count = 0
+        self._last_pre_debug: dict | None = None
+        # Fixed episode length in steps (optional override)
+        self._episode_steps = int(self.cfg.get("env", {}).get("episode_steps", 0) or 0)
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
         init_cfg = (options or {}).get("init_cfg", {})
-        ps: PropagatorState = self.propagator.reset(seed or 0, init_cfg)
+        # Use provided seed if given; otherwise draw a fresh one from env RNG so each episode varies
+        try:
+            rng_seed = int(seed) if seed is not None else int(self.np_random.integers(0, 2**31 - 1))
+        except Exception:
+            # Fallback to python's randomness if np_random not ready
+            import random
+            rng_seed = random.randint(0, 2**31 - 1)
+        ps: PropagatorState = self.propagator.reset(rng_seed, init_cfg)
         # Store initial reference
         self._ref_r0 = ps.r_eci.copy()
         self._ref_v0 = ps.v_eci.copy()
@@ -45,6 +61,14 @@ class RLSatEnv(gym.Env):
         self.cfg.setdefault("env", {})["period_s"] = float(self._period_s)
         self._last_ps = ps
         self._cum_dv = 0.0
+        self._step_count = 0
+        # Store target altitude (m) for termination: default = initial altitude
+        try:
+            R_E = 6371e3
+            alt0 = float(np.linalg.norm(np.asarray(ps.r_eci, dtype=np.float64)) - R_E)
+            self.cfg.setdefault("env", {})["target_alt_m"] = float(self.cfg.get("env", {}).get("target_alt_m", alt0))
+        except Exception:
+            pass
         obs = self._build_obs(ps)
         # Reset action history to current action dimension
         if self.u_prev.shape[0] != self.action_space.shape[0]:
@@ -54,6 +78,47 @@ class RLSatEnv(gym.Env):
         return obs, {}
 
     def step(self, action):
+        # Optional debug: pre-action state snapshot
+        if self._debug_pre and (self._step_count % self._debug_every == 0) and self._last_ps is not None:
+            ps0 = self._last_ps
+            if self._debug_print:
+                try:
+                    # Prefer human-readable lat/lon/alt if epoch is available
+                    from ..sim import frames as _f
+                    jd0 = getattr(self.propagator, "jd0_utc", None)
+                    if jd0 is not None:
+                        jd = float(jd0) + float(getattr(ps0, "t", 0.0)) / 86400.0
+                        r_ecef = _f.eci_to_ecef(ps0.r_eci, jd)
+                        lat, lon, alt = _f.ecef_to_geodetic(r_ecef)
+                        import os
+                        print(f"[Env pid={os.getpid()}] pre t={ps0.t:.3f}s lat={np.degrees(lat):.5f} lon={np.degrees(lon):.5f} alt={alt:.1f}m")
+                    else:
+                        r = ps0.r_eci; q = ps0.q_be
+                        import os
+                        print(f"[Env pid={os.getpid()}] pre t={ps0.t:.3f}s r=[{r[0]:.3f},{r[1]:.3f},{r[2]:.3f}] q=[{q[0]:.6f},{q[1]:.6f},{q[2]:.6f},{q[3]:.6f}]")
+                except Exception:
+                    pass
+            pre_info = {
+                "pre/r_eci": np.asarray(ps0.r_eci, dtype=float).copy(),
+                "pre/v_eci": np.asarray(ps0.v_eci, dtype=float).copy(),
+                "pre/q_be": np.asarray(ps0.q_be, dtype=float).copy(),
+                "pre/t_s": float(getattr(ps0, "t", 0.0)),
+                # Attach LLA if possible
+                **(lambda jd0_: (lambda jd: (lambda latlonalt: {
+                    "pre/lat_deg": float(np.degrees(latlonalt[0])),
+                    "pre/lon_deg": float(np.degrees(latlonalt[1])),
+                    "pre/alt_m": float(latlonalt[2]),
+                } if latlonalt is not None else {})
+                    ( (_f.eci_to_ecef(ps0.r_eci, jd),) and _f.ecef_to_geodetic(_f.eci_to_ecef(ps0.r_eci, jd)) )
+                )( float(jd0_) + float(getattr(ps0, "t", 0.0)) / 86400.0 ) if jd0_ is not None else {}) (getattr(self.propagator, "jd0_utc", None))
+            }
+            # Store a compact copy for callbacks
+            self._last_pre_debug = {
+                k.replace("pre/", ""): v for k, v in pre_info.items() if k.startswith("pre/")
+            }
+        else:
+            pre_info = {}
+            self._last_pre_debug = None
         # Apply safety with knowledge of current state (for eclipse gating)
         u_scaled, sf_info = apply_safety(action, self.cfg, state=self._last_ps)
         # Step propagator depending on action type
@@ -71,6 +136,8 @@ class RLSatEnv(gym.Env):
         # Metrics for logging/eval
         metrics = self._metrics(ps, u_scaled)
         info = {"sf": sf_info}
+        if pre_info:
+            info.update(pre_info)
         info.update(metrics)
         # Reward and termination
         r, terms = rewards.compute(obs, self.u_prev, u_scaled, self.cfg)
@@ -87,9 +154,19 @@ class RLSatEnv(gym.Env):
                 pass
         else:
             self._cum_dv += float(np.linalg.norm(u_scaled[:3])) * float(getattr(ps, "dt", 1.0))
+        # Enforce fixed episode length if configured
+        if self._episode_steps > 0 and (self._step_count + 1) >= self._episode_steps and not terminated:
+            truncated = True
+            info["episode_steps_limit"] = True
+
         self._last_ps = ps
         self.u_prev = u_scaled
+        self._step_count += 1
         return obs, float(r), bool(terminated), bool(truncated), info
+
+    # Exposed for callbacks to fetch latest pre-action debug values
+    def get_pre_debug(self):
+        return self._last_pre_debug.copy() if isinstance(self._last_pre_debug, dict) else None
 
     def _build_obs(self, ps: PropagatorState):
         env_cfg = self.cfg.get("env", {})

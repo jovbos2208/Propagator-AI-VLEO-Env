@@ -67,3 +67,51 @@ def quat_err(q_target: np.ndarray, q_be: np.ndarray) -> np.ndarray:
     q = np.array([w, x, y, z])
     return q / (np.linalg.norm(q) + 1e-12)
 
+
+# --- Earth-fixed conversions (approximate) ---
+
+# WGS84 constants
+_WGS84_A = 6378137.0
+_WGS84_F = 1.0 / 298.257223563
+_WGS84_E2 = _WGS84_F * (2.0 - _WGS84_F)
+
+
+def _gmst_rad(jd_utc: float) -> float:
+    # Approximate GMST (IAU 1982) given Julian date UTC
+    T = (jd_utc - 2451545.0) / 36525.0
+    gmst_sec = (
+        67310.54841
+        + (876600.0 * 3600.0 + 8640184.812866) * T
+        + 0.093104 * T * T
+        - 6.2e-6 * T * T * T
+    )
+    gmst_rad = (gmst_sec % 86400.0) * (2.0 * np.pi / 86400.0)
+    return gmst_rad
+
+
+def eci_to_ecef(r_eci: np.ndarray, jd_utc: float) -> np.ndarray:
+    # Rotate about Z by GMST to get ECEF
+    theta = _gmst_rad(float(jd_utc))
+    c, s = np.cos(theta), np.sin(theta)
+    R3 = np.array([[c, s, 0.0], [-s, c, 0.0], [0.0, 0.0, 1.0]], dtype=np.float64)
+    return R3 @ np.asarray(r_eci, dtype=np.float64)
+
+
+def ecef_to_geodetic(r_ecef: np.ndarray):
+    # Convert ECEF (meters) to geodetic lat [rad], lon [rad], alt [m]
+    x, y, z = map(float, r_ecef)
+    lon = np.arctan2(y, x)
+    p = np.hypot(x, y)
+    if p < 1e-9:
+        lat = np.sign(z) * (np.pi / 2)
+        alt = abs(z) - _WGS84_A * np.sqrt(1.0 - _WGS84_E2)
+        return lat, lon, alt
+    # Bowring's method
+    b = _WGS84_A * (1.0 - _WGS84_F)
+    e2 = _WGS84_E2
+    ep2 = ( _WGS84_A**2 - b**2 ) / (b**2)
+    th = np.arctan2(_WGS84_A * z, b * p)
+    lat = np.arctan2(z + ep2 * b * np.sin(th)**3, p - e2 * _WGS84_A * np.cos(th)**3)
+    N = _WGS84_A / np.sqrt(1.0 - e2 * np.sin(lat)**2)
+    alt = p / np.cos(lat) - N
+    return lat, lon, alt

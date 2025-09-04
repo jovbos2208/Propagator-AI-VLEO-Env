@@ -50,7 +50,8 @@ class ShuttlecockPropagator(PropagatorInterface):
                  mass_kg: float = 1.0,
                  thrust_max_N: float = 0.05,
                  eta_limit_rad: float = math.pi/6,
-                 tau_max: float = 0.01):
+                 tau_max: float = 0.01,
+                 debug_print: bool = False):
         from python.shuttlecock_env import ShuttlecockEnvC  # lazy import
         self.envc = ShuttlecockEnvC(config_path=config_path.encode("utf-8"), align_to_velocity=True, integrator="dp54")
         self.control_dt = float(control_dt)
@@ -62,6 +63,7 @@ class ShuttlecockPropagator(PropagatorInterface):
         self.eta_limit_rad = float(eta_limit_rad)
         self.tau_max = float(tau_max)
         self._last_state: PropagatorState | None = None
+        self.debug_print = bool(debug_print)
 
     def set_mode(self, mode: str):
         # Not used by underlying env; kept for API compatibility
@@ -73,6 +75,7 @@ class ShuttlecockPropagator(PropagatorInterface):
 
     def reset(self, seed: int, init_cfg: Dict[str, Any]) -> PropagatorState:
         jd0 = float(init_cfg.get("jd0_utc", 2451545.0))
+        self.jd0_utc = jd0
         obs = self.envc.reset_random(int(seed), jd0)
         ps = self._obs_to_state(obs, t=0.0, dt=self.control_dt)
         self._last_state = ps
@@ -105,6 +108,20 @@ class ShuttlecockPropagator(PropagatorInterface):
         eta2 = float(np.clip(s[1] * self.eta_limit_rad, -self.eta_limit_rad, self.eta_limit_rad))
 
         # Step the shuttlecock env
+        if self.debug_print:
+            try:
+                ps = self._last_state
+                from . import frames as _f
+                jd = getattr(self, "jd0_utc", 2451545.0) + float(ps.t) / 86400.0
+                r_ecef = _f.eci_to_ecef(ps.r_eci, jd)
+                lat, lon, alt = _f.ecef_to_geodetic(r_ecef)
+                import os
+                print(
+                    f"[Shuttlecock pid={os.getpid()}] t={ps.t:.3f}s pre lat={np.degrees(lat):.5f} lon={np.degrees(lon):.5f} alt={alt:.1f}m "
+                    f"| dt={dt:.3f}s eta1={eta1:.5f} eta2={eta2:.5f} thrust_N={thrust_N:.6f}"
+                )
+            except Exception:
+                pass
         if self.use_substeps:
             sr = self.envc.step_substeps(eta1, eta2, thrust_N, self.substeps)
             dt_eff = max(1e-9, float(sr.substeps)) * dt  # approximate elapsed time
@@ -113,6 +130,16 @@ class ShuttlecockPropagator(PropagatorInterface):
             dt_eff = dt
 
         ps = self._obs_to_state(sr.obs, t=self._last_state.t + dt_eff, dt=dt_eff)
+        if self.debug_print:
+            try:
+                from . import frames as _f
+                jd = getattr(self, "jd0_utc", 2451545.0) + float(ps.t) / 86400.0
+                r_ecef = _f.eci_to_ecef(ps.r_eci, jd)
+                lat, lon, alt = _f.ecef_to_geodetic(r_ecef)
+                import os
+                print(f"[Shuttlecock pid={os.getpid()}] post t={ps.t:.3f}s lat={np.degrees(lat):.5f} lon={np.degrees(lon):.5f} alt={alt:.1f}m")
+            except Exception:
+                pass
         self._last_state = ps
         return ps
 
@@ -133,6 +160,20 @@ class ShuttlecockPropagator(PropagatorInterface):
         eta2c = float(np.clip(eta2, -self.eta_limit_rad, self.eta_limit_rad))
         thrust_c = float(np.clip(thrust_N, 0.0, self.thrust_max_N))
 
+        if self.debug_print:
+            try:
+                ps0 = self._last_state
+                from . import frames as _f
+                jd = getattr(self, "jd0_utc", 2451545.0) + float(ps0.t) / 86400.0
+                r_ecef = _f.eci_to_ecef(ps0.r_eci, jd)
+                lat, lon, alt = _f.ecef_to_geodetic(r_ecef)
+                import os
+                print(
+                    f"[Shuttlecock pid={os.getpid()}] t={ps0.t:.3f}s pre lat={np.degrees(lat):.5f} lon={np.degrees(lon):.5f} alt={alt:.1f}m "
+                    f"| dt={dt:.3f}s angles=({eta1c:.5f},{eta2c:.5f}) thrust_N={thrust_c:.6f}"
+                )
+            except Exception:
+                pass
         if self.use_substeps:
             sr = self.envc.step_substeps(eta1c, eta2c, thrust_c, self.substeps)
             dt_eff = max(1e-9, float(sr.substeps)) * dt
@@ -141,6 +182,16 @@ class ShuttlecockPropagator(PropagatorInterface):
             dt_eff = dt
 
         ps = self._obs_to_state(sr.obs, t=self._last_state.t + dt_eff, dt=dt_eff)
+        if self.debug_print:
+            try:
+                from . import frames as _f
+                jd = getattr(self, "jd0_utc", 2451545.0) + float(ps.t) / 86400.0
+                r_ecef = _f.eci_to_ecef(ps.r_eci, jd)
+                lat, lon, alt = _f.ecef_to_geodetic(r_ecef)
+                import os
+                print(f"[Shuttlecock pid={os.getpid()}] post t={ps.t:.3f}s lat={np.degrees(lat):.5f} lon={np.degrees(lon):.5f} alt={alt:.1f}m")
+            except Exception:
+                pass
         self._last_state = ps
         return ps
 
