@@ -85,6 +85,8 @@ def main():
     n_epochs = int(args.n_epochs) if int(args.n_epochs) > 0 else int(tcfg.get("n_epochs", 10))
     learning_rate = float(args.learning_rate) if float(args.learning_rate) > 0 else float(tcfg.get("learning_rate", 3e-4))
     tb_dir = str(tcfg.get("tb_logdir", "runs/tb"))
+    resume_from = tcfg.get("resume_from", None)
+    reset_num_timesteps = bool(tcfg.get("reset_num_timesteps", False))
 
     # Apply to env config
     cfg["env"]["episode_orbits"] = episode_orbits
@@ -136,16 +138,20 @@ def main():
 
     # Default TB logging to runs/tb
     # TB directory from config (default runs/tb)
-    model = PPO(
-        "MlpPolicy",
-        env,
-        verbose=1,
-        tensorboard_log=tb_dir,
-        n_steps=n_steps,
-        batch_size=batch_size,
-        n_epochs=int(n_epochs),
-        learning_rate=float(learning_rate),
-    )
+    if resume_from and os.path.exists(str(resume_from)):
+        # Resume: load model with saved hyperparams
+        model = PPO.load(str(resume_from), env=env, tensorboard_log=tb_dir)
+    else:
+        model = PPO(
+            "MlpPolicy",
+            env,
+            verbose=1,
+            tensorboard_log=tb_dir,
+            n_steps=n_steps,
+            batch_size=batch_size,
+            n_epochs=int(n_epochs),
+            learning_rate=float(learning_rate),
+        )
     callbacks = []
     callbacks.append(ProgressBarCallback(total=int(total_steps), desc="PPO"))
     callbacks.append(EpisodeEndTB())
@@ -153,7 +159,7 @@ def main():
 
     # Choose a sensible default training horizon if not specified elsewhere
     # Use a very large log_interval so default TB flushes happen via EpisodeEndTB
-    learn_kwargs = dict(total_timesteps=int(total_steps), log_interval=10**9, tb_log_name="ppo_rlsat")
+    learn_kwargs = dict(total_timesteps=int(total_steps), log_interval=10**9, tb_log_name="ppo_rlsat", reset_num_timesteps=bool(reset_num_timesteps))
     model.learn(callback=callbacks if callbacks else None, **learn_kwargs)
 
     os.makedirs("runs", exist_ok=True)
