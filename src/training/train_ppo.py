@@ -7,7 +7,7 @@ from pathlib import Path
 import yaml
 import gymnasium as gym
 from stable_baselines3 import PPO
-from stable_baselines3.common.vec_env import SubprocVecEnv, DummyVecEnv
+from stable_baselines3.common.vec_env import SubprocVecEnv, DummyVecEnv, VecNormalize
 
 # Ensure 'src' is on sys.path when running as a module
 SRC_DIR = Path(__file__).resolve().parents[1]
@@ -17,7 +17,7 @@ if str(SRC_DIR) not in sys.path:
 from rl_sat.envs.satellite_env import RLSatEnv
 from rl_sat.sim.interfaces import DummyPropagator
 from rl_sat.sim.shuttlecock_adapter import ShuttlecockPropagator
-from .callbacks import ProgressBarCallback, LogPreActionLLA, EpisodeEndTB
+from .callbacks import ProgressBarCallback, LogPreActionLLA, EpisodeEndTB, StepMetricsTB, EvalEveryOrbitsTB
 
 
 def make_env(
@@ -29,9 +29,9 @@ def make_env(
         # Ensure env-specific debug configuration is present
         cfg.setdefault("debug", {})
         cfg["debug"].update({
-            "pre_action": True,
-            "every": 1,
-            "print": True,
+            "pre_action": False,
+            "every": 50,
+            "print": False,
         })
         if use_shuttle:
             prop = ShuttlecockPropagator(
@@ -43,7 +43,7 @@ def make_env(
                 mass_kg=float(cfg["env"].get("mass_kg", 1.0)),
                 thrust_max_N=float(cfg["env"].get("thrust_max_N", 0.05)),
                 eta_limit_rad=float(cfg["env"].get("eta_limit_rad", 0.5235987756)),
-                debug_print=True,
+                debug_print=False,
             )
         else:
             prop = DummyPropagator(dt=float(cfg["env"].get("dt", 1.0)))
@@ -66,6 +66,10 @@ def main():
     )
     ap.add_argument("--n-epochs", type=int, default=-1, help="PPO epochs per update (overrides config)")
     ap.add_argument("--learning-rate", type=float, default=-1.0, help="PPO optimizer learning rate (overrides config)")
+    ap.add_argument("--normalize", action="store_true", help="Wrap env with VecNormalize (obs+reward)")
+    ap.add_argument("--tb-logdir", default="runs/tb", help="TensorBoard log directory")
+    ap.add_argument("--tb-train-every", type=int, default=10, help="Log per-step TB metrics every N steps")
+    ap.add_argument("--tb-eval-orbits", type=int, default=10, help="Run periodic eval every N orbits")
     args = ap.parse_args()
 
     with open(args.config, "r") as f:
@@ -84,7 +88,7 @@ def main():
     update_every_episodes = int(args.update_every_episodes) if int(args.update_every_episodes) > 0 else int(tcfg.get("update_every_episodes", 1))
     n_epochs = int(args.n_epochs) if int(args.n_epochs) > 0 else int(tcfg.get("n_epochs", 10))
     learning_rate = float(args.learning_rate) if float(args.learning_rate) > 0 else float(tcfg.get("learning_rate", 3e-4))
-    tb_dir = str(tcfg.get("tb_logdir", "runs/tb"))
+    tb_dir = str(args.tb_logdir or tcfg.get("tb_logdir", "runs/tb"))
     resume_from = tcfg.get("resume_from", None)
     reset_num_timesteps = bool(tcfg.get("reset_num_timesteps", False))
 
@@ -129,6 +133,9 @@ def main():
             )
         ])
 
+    if args.normalize:
+        env = VecNormalize(env, norm_obs=True, norm_reward=True)
+
     # Compute PPO rollout length from episodes and envs
     episode_steps = int(cfg["env"]["episode_steps"]) 
     episodes_per_update = max(1, int(update_every_episodes))
@@ -155,7 +162,15 @@ def main():
     callbacks = []
     callbacks.append(ProgressBarCallback(total=int(total_steps), desc="PPO"))
     callbacks.append(EpisodeEndTB())
-    callbacks.append(LogPreActionLLA(every=1))
+    callbacks.append(LogPreActionLLA(every=max(1, int(episode_orbits))))
+    callbacks.append(StepMetricsTB(every=max(1, int(args.tb_train_every))))
+    callbacks.append(EvalEveryOrbitsTB(lambda: DummyVecEnv([
+        make_env(
+            cfg,
+            use_shuttle,
+            "cpp/configs/shuttlecock_250km.json",
+        )
+    ]), cfg, orbits_interval=max(1, int(args.tb_eval_orbits))))
 
     # Choose a sensible default training horizon if not specified elsewhere
     # Use a very large log_interval so default TB flushes happen via EpisodeEndTB
