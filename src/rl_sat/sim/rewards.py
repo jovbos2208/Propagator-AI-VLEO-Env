@@ -82,10 +82,45 @@ def compute(obs: np.ndarray, u_prev: np.ndarray, u: np.ndarray, cfg: dict, ps=No
     else:
         r_alt = -rw.w_a * abs(float(alt_m))  # penalize deviation proxy if no explicit target
 
+    # Optional auxiliary penalties
+    env_cfg = cfg.get("env", {})
+    mode = str(env_cfg.get("action_type", "rtn_torque")).lower()
+    # Thrust/acceleration magnitude penalty (proxy for delta-v usage)
+    r_dv_cmd = 0.0
+    try:
+        if mode in ("angles_only", "angles_thrust"):
+            thrust_N = float(u[2]) if len(u) >= 3 else 0.0
+            mass = float(getattr(ps, "mass", 1.0)) if ps is not None else 1.0
+            a_cmd = float(thrust_N) / max(mass, 1e-6)
+        else:
+            a_cmd = float(np.linalg.norm(np.asarray(u)[:3]))
+        r_dv_cmd = -float(RewardConfig(**cfg.get("reward_weights", {})).w_dv_cmd) * abs(a_cmd)
+    except Exception:
+        r_dv_cmd = 0.0
+    # Jerk/actuation smoothness penalty
+    r_jerk = 0.0
+    try:
+        du = np.asarray(u, dtype=float) - np.asarray(u_prev, dtype=float)
+        r_jerk = -float(RewardConfig(**cfg.get("reward_weights", {})).w_jerk) * float(np.linalg.norm(du))
+    except Exception:
+        r_jerk = 0.0
+    # Power/SOC penalty: penalize being under a minimum SOC
+    r_power = 0.0
+    try:
+        soc_min = float(env_cfg.get("soc_min", 0.2))
+        soc = float(getattr(ps, "soc", 1.0)) if ps is not None else 1.0
+        deficit = max(0.0, soc_min - soc)
+        r_power = -float(RewardConfig(**cfg.get("reward_weights", {})).w_power) * deficit
+    except Exception:
+        r_power = 0.0
+
     rr = {
         "r_alt": r_alt,
         "r_e": r_e,
         "r_theta": r_theta,
+        "r_dv_cmd": r_dv_cmd,
+        "r_jerk": r_jerk,
+        "r_power": r_power,
     }
     r_total = float(sum(rr.values()))
     return r_total, rr

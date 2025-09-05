@@ -76,7 +76,8 @@ class EvalEveryOrbitsTB(BaseCallback):
     Steps per orbit are inferred from cfg: per_orbit_steps if set, else approx period_s/dt.
     """
 
-    def __init__(self, make_env_fn, cfg: dict, orbits_interval: int = 10, deterministic: bool = True):
+    def __init__(self, make_env_fn, cfg: dict, orbits_interval: int = 10, deterministic: bool = True,
+                 smooth_window: int = 50):
         super().__init__()
         self.make_env_fn = make_env_fn
         self.cfg = cfg
@@ -84,6 +85,8 @@ class EvalEveryOrbitsTB(BaseCallback):
         self.deterministic = bool(deterministic)
         self._last_eval_step = 0
         self._steps_per_orbit = None
+        self._ret_hist = []
+        self._smooth_window = max(1, int(smooth_window))
 
     def _compute_steps_per_orbit(self):
         env_cfg = self.cfg.get("env", {})
@@ -155,6 +158,14 @@ class EvalEveryOrbitsTB(BaseCallback):
             return float(np.nanmean(arr)) if arr.size else float("nan")
 
         self.logger.record("eval10/return", total_r)
+        # Smoothed eval return over recent evals
+        try:
+            self._ret_hist.append(float(total_r))
+            if len(self._ret_hist) > self._smooth_window:
+                self._ret_hist.pop(0)
+            self.logger.record("eval10/return_smooth", float(np.mean(self._ret_hist)))
+        except Exception:
+            pass
         self.logger.record("eval10/steps", steps)
         self.logger.record("eval10/theta_deg_mean", nanmean(theta))
         self.logger.record("eval10/da_m_mean", nanmean(da))
@@ -202,9 +213,25 @@ class StepMetricsTB(BaseCallback):
     Note: Logging every step can be heavy; use `every` to subsample.
     """
 
-    def __init__(self, every: int = 1):
+    def __init__(self, every: int = 1, smooth_window: int = 200,
+                 stall_detect: bool = True, stall_hold: int = 1500,
+                 stall_early_window: int = 3000, stall_frac: float = 0.1,
+                 stall_min_slope: float = 1e-7):
         super().__init__()
         self.every = max(1, int(every))
+        # Smoothing + stall detection state
+        self._smooth_window = max(1, int(smooth_window))
+        self._stall_detect = bool(stall_detect)
+        self._stall_hold = max(50, int(stall_hold))
+        self._stall_early_window = max(100, int(stall_early_window))
+        self._stall_frac = float(stall_frac)
+        self._stall_min_slope = float(stall_min_slope)
+        self._r_hist = []  # recent train/reward_mean values
+        self._s_hist = []  # smoothed values (same length as _r_hist)
+        self._t_hist = []  # steps for each entry
+        self._abs_g_hist = []  # absolute gradient of smoothed curve
+        self._stall_step: Optional[int] = None
+        self._stall_emitted_once = False
 
     def _on_step(self) -> bool:
         if (self.num_timesteps % self.every) != 0:
@@ -212,12 +239,64 @@ class StepMetricsTB(BaseCallback):
         rewards = self.locals.get("rewards", None)
         infos = self.locals.get("infos", None)
         actions = self.locals.get("actions", None)
+        r_mean = None
         if rewards is not None:
             try:
                 r = np.asarray(rewards).reshape(-1)
-                self.logger.record("train/reward_mean", float(np.mean(r)))
+                r_mean = float(np.mean(r))
+                self.logger.record("train/reward_mean", r_mean)
             except Exception:
                 pass
+        # Smoothing + stall detection on the per-step reward_mean
+        if r_mean is not None:
+            step = int(self.num_timesteps)
+            self._t_hist.append(step)
+            self._r_hist.append(r_mean)
+            # maintain window
+            if len(self._r_hist) > self._smooth_window:
+                self._r_hist.pop(0)
+                self._t_hist.pop(0)
+                if self._s_hist:
+                    self._s_hist.pop(0)
+            # Cap gradient history to a reasonable window for stall detection
+            max_hist = max(self._stall_early_window, self._stall_hold) + 10
+            if len(self._abs_g_hist) > max_hist:
+                excess = len(self._abs_g_hist) - max_hist
+                if excess > 0:
+                    self._abs_g_hist = self._abs_g_hist[excess:]
+            # compute smoothed value (simple moving average)
+            s_val = float(np.mean(self._r_hist))
+            self._s_hist.append(s_val)
+            self.logger.record("train/reward_mean_smooth", s_val)
+            # gradient requires at least two points and monotonic steps
+            if len(self._s_hist) >= 2 and len(self._t_hist) >= 2:
+                dt = float(self._t_hist[-1] - self._t_hist[-2]) or 1.0
+                g = abs((self._s_hist[-1] - self._s_hist[-2]) / dt)
+                self._abs_g_hist.append(g)
+                # Stall detection after early window
+                if self._stall_detect and self._stall_step is None:
+                    # Use the first N gradients as early window reference when available
+                    if len(self._abs_g_hist) >= self._stall_early_window:
+                        early_slice = self._abs_g_hist[: self._stall_early_window]
+                        early_peak = float(np.percentile(early_slice, 95)) if early_slice else 0.0
+                        thr = max(early_peak * self._stall_frac, self._stall_min_slope)
+                        # Check if last HOLD gradients are consistently below threshold
+                        win = self._abs_g_hist[-self._stall_hold :]
+                        if len(win) >= self._stall_hold and (np.nanmax(win) < thr):
+                            self._stall_step = step
+                # Log stall diagnostics
+                if self._stall_detect:
+                    self.logger.record("diagnostics/stall_flag", 1.0 if self._stall_step is not None else 0.0)
+                    if self._stall_step is not None and not self._stall_emitted_once:
+                        # Emit once so it can be read from TB scalars
+                        self.logger.record("diagnostics/stall_step", float(self._stall_step))
+                        # A marker that overlays on reward curve: NaN except at stall_step
+                        self.logger.record("diagnostics/stall_marker", s_val)
+                        self._stall_emitted_once = True
+                    else:
+                        # Keep marker empty on other steps
+                        # Some TB backends ignore NaN; we avoid logging the tag at all when not at stall
+                        pass
         # Reward components and metrics from infos
         if isinstance(infos, (list, tuple)) and infos:
             def mean_from_infos(key: str):
@@ -230,8 +309,12 @@ class StepMetricsTB(BaseCallback):
                         continue
                 return (float(np.mean(vals)) if vals else None)
 
-            # Reward parts
-            for k in ("r_alt", "r_e", "r_theta"):
+            # Reward parts (log any r_* term we find)
+            keys0 = list(infos[0].keys()) if isinstance(infos[0], dict) else []
+            r_keys = [k for k in keys0 if isinstance(k, str) and k.startswith("r_")]
+            if not r_keys:
+                r_keys = ["r_alt", "r_e", "r_theta"]
+            for k in r_keys:
                 m = mean_from_infos(k)
                 if m is not None:
                     self.logger.record(f"train/{k}_mean", m)

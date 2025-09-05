@@ -115,3 +115,53 @@ def ecef_to_geodetic(r_ecef: np.ndarray):
     N = _WGS84_A / np.sqrt(1.0 - e2 * np.sin(lat)**2)
     alt = p / np.cos(lat) - N
     return lat, lon, alt
+
+
+# --- Solar position and eclipse (low-precision) ---
+
+def _deg2rad(x: float) -> float:
+    return float(x) * (np.pi / 180.0)
+
+
+def sun_vec_eci(jd_utc: float) -> np.ndarray:
+    """Approximate unit vector from Earth to Sun in ECI (equatorial) frame.
+
+    Low-precision algorithm good to a few arcminutes. Based on NOAA/USNO formulas:
+      - n = JD - J2000
+      - L = 280.460 + 0.9856474 n (deg)
+      - g = 357.528 + 0.9856003 n (deg)
+      - lambda = L + 1.915 sin g + 0.020 sin 2g (deg)
+      - epsilon = 23.439 - 0.0000004 n (deg)
+      - ECI: [cos l, cos eps * sin l, sin eps * sin l]
+    """
+    n = float(jd_utc) - 2451545.0
+    L = 280.460 + 0.9856474 * n
+    g = 357.528 + 0.9856003 * n
+    lam = L + 1.915 * np.sin(_deg2rad(g)) + 0.020 * np.sin(_deg2rad(2.0 * g))
+    eps = 23.439 - 0.0000004 * n
+    lam_r = _deg2rad(lam)
+    eps_r = _deg2rad(eps)
+    x = np.cos(lam_r)
+    y = np.cos(eps_r) * np.sin(lam_r)
+    z = np.sin(eps_r) * np.sin(lam_r)
+    v = np.array([x, y, z], dtype=np.float64)
+    return v / (np.linalg.norm(v) + 1e-12)
+
+
+def in_earth_eclipse(r_eci: np.ndarray, jd_utc: float, margin_m: float = 0.0) -> bool:
+    """Cylindrical Earth shadow test.
+
+    Returns True if the satellite at r_eci is behind Earth relative to the Sun and within
+    the Earth's radius (plus margin) from the shadow axis.
+    """
+    s_hat = sun_vec_eci(jd_utc)
+    r = np.asarray(r_eci, dtype=np.float64)
+    # Dayside: dot > 0 -> illuminated
+    if float(np.dot(r, s_hat)) > 0.0:
+        return False
+    # Perpendicular distance from Earth-Sun axis
+    r_par = float(np.dot(r, s_hat))
+    r_perp_vec = r - r_par * s_hat
+    d = float(np.linalg.norm(r_perp_vec))
+    R_E = 6371e3 + float(margin_m)
+    return d < R_E

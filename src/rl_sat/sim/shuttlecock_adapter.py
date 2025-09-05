@@ -51,6 +51,10 @@ class ShuttlecockPropagator(PropagatorInterface):
                  thrust_max_N: float = 0.05,
                  eta_limit_rad: float = math.pi/6,
                  tau_max: float = 0.01,
+                 # Simple power model parameters
+                 batt_wh: float = 50.0,
+                 power_gen_w: float = 5.0,
+                 power_use_w: float = 5.0,
                  debug_print: bool = False):
         from python.shuttlecock_env import ShuttlecockEnvC  # lazy import
         dbg_csv = b"runs/shuttle_debug.csv" if debug_print else None
@@ -64,6 +68,11 @@ class ShuttlecockPropagator(PropagatorInterface):
         self.eta_limit_rad = float(eta_limit_rad)
         self.tau_max = float(tau_max)
         self._last_state: PropagatorState | None = None
+        # Power model
+        self.batt_wh = float(batt_wh)
+        self.power_gen_w = float(power_gen_w)
+        self.power_use_w = float(power_use_w)
+        self._soc = 1.0
         self.debug_print = bool(debug_print)
 
     def set_mode(self, mode: str):
@@ -78,6 +87,7 @@ class ShuttlecockPropagator(PropagatorInterface):
         jd0 = float(init_cfg.get("jd0_utc", 2451545.0))
         self.jd0_utc = jd0
         obs = self.envc.reset_random(int(seed), jd0)
+        self._soc = 1.0
         ps = self._obs_to_state(obs, t=0.0, dt=self.control_dt)
         self._last_state = ps
         return ps
@@ -196,22 +206,39 @@ class ShuttlecockPropagator(PropagatorInterface):
         self._last_state = ps
         return ps
 
-    @staticmethod
-    def _obs_to_state(obs, t: float, dt: float) -> PropagatorState:
+    def _obs_to_state(self, obs, t: float, dt: float) -> PropagatorState:
         r = np.array([obs.r_eci[0], obs.r_eci[1], obs.r_eci[2]], dtype=np.float64)
         v = np.array([obs.v_eci[0], obs.v_eci[1], obs.v_eci[2]], dtype=np.float64)
         q = np.array([obs.q_BI[0], obs.q_BI[1], obs.q_BI[2], obs.q_BI[3]], dtype=np.float64)
         w = np.array([obs.w_B[0], obs.w_B[1], obs.w_B[2]], dtype=np.float64)
         h = np.zeros(3, dtype=np.float64)
+        # Compute eclipse flag (approx) using current epoch
+        # Current epoch for sun position
+        jd = float(getattr(self, "jd0_utc", 2451545.0)) + float(t) / 86400.0
+        try:
+            from . import frames as _f
+            in_ecl = bool(_f.in_earth_eclipse(r, jd, margin_m=0.0))
+        except Exception:
+            in_ecl = False
+        # Update simple power/SOC integrator
+        try:
+            batt_j = max(1e-3, float(self.batt_wh) * 3600.0)
+            p_gen = float(self.power_gen_w) if not in_ecl else 0.0
+            p_use = float(self.power_use_w)
+            dE = (p_gen - p_use) * float(dt)
+            soc = float(np.clip((self._soc * batt_j + dE) / batt_j, 0.0, 1.0))
+            self._soc = soc
+        except Exception:
+            soc = getattr(self, "_soc", 1.0)
         return PropagatorState(
             r_eci=r,
             v_eci=v,
             q_be=q,
             omega_b=w,
             h_rw=h,
-            soc=1.0,
-            mass=1.0,
-            in_eclipse=False,
+            soc=float(soc),
+            mass=float(getattr(self, "mass_kg", 1.0)),
+            in_eclipse=bool(in_ecl),
             density=float(obs.rho),
             t=float(t),
             dt=float(dt),

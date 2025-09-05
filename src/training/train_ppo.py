@@ -43,6 +43,10 @@ def make_env(
                 mass_kg=float(cfg["env"].get("mass_kg", 1.0)),
                 thrust_max_N=float(cfg["env"].get("thrust_max_N", 0.05)),
                 eta_limit_rad=float(cfg["env"].get("eta_limit_rad", 0.5235987756)),
+                tau_max=float(cfg["env"].get("tau_max", 0.01)),
+                batt_wh=float(cfg["env"].get("batt_wh", 50.0)),
+                power_gen_w=float(cfg["env"].get("power_gen_w", 5.0)),
+                power_use_w=float(cfg["env"].get("power_use_w", 5.0)),
                 debug_print=False,
             )
         else:
