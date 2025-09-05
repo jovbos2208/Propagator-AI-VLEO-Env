@@ -190,6 +190,106 @@ class EvalEveryOrbitsTB(BaseCallback):
         return True
 
 
+class StepMetricsTB(BaseCallback):
+    """Logs per-step training reward breakdown and actions to TensorBoard.
+
+    - Records mean total reward across envs.
+    - Records mean of reward components found in infos: r_alt, r_e, r_theta.
+    - Records selected metrics from infos (means across envs) such as theta_deg, alt_m, target_alt_m,
+      e, target_ecc, da_m, dr_rtn_m, dv_rtn_mps, cum_dv_mps, a_cmd_mps2, tau_cmd_nm.
+    - Records action stats: mean L2 norm and per-component mean and mean absolute.
+
+    Note: Logging every step can be heavy; use `every` to subsample.
+    """
+
+    def __init__(self, every: int = 1):
+        super().__init__()
+        self.every = max(1, int(every))
+
+    def _on_step(self) -> bool:
+        if (self.num_timesteps % self.every) != 0:
+            return True
+        rewards = self.locals.get("rewards", None)
+        infos = self.locals.get("infos", None)
+        actions = self.locals.get("actions", None)
+        if rewards is not None:
+            try:
+                r = np.asarray(rewards).reshape(-1)
+                self.logger.record("train/reward_mean", float(np.mean(r)))
+            except Exception:
+                pass
+        # Reward components and metrics from infos
+        if isinstance(infos, (list, tuple)) and infos:
+            def mean_from_infos(key: str):
+                vals = []
+                for info in infos:
+                    try:
+                        if key in info:
+                            vals.append(float(info[key]))
+                    except Exception:
+                        continue
+                return (float(np.mean(vals)) if vals else None)
+
+            # Reward parts
+            for k in ("r_alt", "r_e", "r_theta"):
+                m = mean_from_infos(k)
+                if m is not None:
+                    self.logger.record(f"train/{k}_mean", m)
+            # Selected metrics helpful for evaluation
+            for k in ("theta_deg", "alt_m", "target_alt_m", "e", "target_ecc", "da_m",
+                      "dr_rtn_m", "dv_rtn_mps", "cum_dv_mps", "a_cmd_mps2", "tau_cmd_nm", "t_s"):
+                m = mean_from_infos(k)
+                if m is not None:
+                    self.logger.record(f"train/{k}_mean", m)
+        # Actions
+        if actions is not None:
+            try:
+                a = np.asarray(actions)
+                if a.ndim == 1:
+                    a = a.reshape(1, -1)
+                norms = np.linalg.norm(a, axis=1)
+                self.logger.record("train/action_l2_mean", float(np.mean(norms)))
+                # per-component statistics
+                comp_mean = np.mean(a, axis=0)
+                comp_abs_mean = np.mean(np.abs(a), axis=0)
+                for i, (m, am) in enumerate(zip(comp_mean, comp_abs_mean)):
+                    self.logger.record(f"train/action_mean_{i}", float(m))
+                    self.logger.record(f"train/action_abs_mean_{i}", float(am))
+            except Exception:
+                pass
+        # Scaled/raw actions from infos (if provided by env)
+        if isinstance(infos, (list, tuple)) and infos:
+            # Helper to average values across infos
+            def mean_from_infos(key: str):
+                vals = []
+                for info in infos:
+                    try:
+                        if key in info:
+                            vals.append(float(info[key]))
+                    except Exception:
+                        continue
+                return (float(np.mean(vals)) if vals else None)
+            # Determine component indices by inspecting keys
+            keys0 = list(infos[0].keys()) if isinstance(infos[0], dict) else []
+            def _comp_indices(prefix: str):
+                idx = []
+                for k in keys0:
+                    if k.startswith(prefix):
+                        try:
+                            idx.append(int(k[len(prefix):]))
+                        except Exception:
+                            continue
+                return sorted(set(idx))
+            for prefix, name in (("act_raw_", "act_raw"), ("act_scaled_", "act_scaled")):
+                idxs = _comp_indices(prefix)
+                for i in idxs:
+                    m = mean_from_infos(f"{prefix}{i}")
+                    if m is not None:
+                        self.logger.record(f"train/{name}_mean_{i}", float(m))
+        self.logger.dump(self.num_timesteps)
+        return True
+
+
 class LogPreActionLLA(BaseCallback):
     """Logs pre-action lat/lon/alt and time from each sub-env to TensorBoard.
 

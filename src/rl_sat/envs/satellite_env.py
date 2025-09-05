@@ -140,8 +140,18 @@ class RLSatEnv(gym.Env):
             info.update(pre_info)
         info.update(metrics)
         # Reward and termination
-        r, terms = rewards.compute(obs, self.u_prev, u_scaled, self.cfg)
+        r, terms = rewards.compute(obs, self.u_prev, u_scaled, self.cfg, ps=ps)
         info.update(terms)
+        # Log raw and scaled actions per-component for TB
+        try:
+            a_raw = np.asarray(action).reshape(-1)
+            a_scl = np.asarray(u_scaled).reshape(-1)
+            for i in range(a_raw.shape[0]):
+                info[f"act_raw_{i}"] = float(a_raw[i])
+            for i in range(a_scl.shape[0]):
+                info[f"act_scaled_{i}"] = float(a_scl[i])
+        except Exception:
+            pass
         terminated, truncated, fail_flag = termination.check(ps, obs, self.cfg)
         # Update trackers
         if action_type in ("angles_only", "angles_thrust"):
@@ -246,12 +256,21 @@ class RLSatEnv(gym.Env):
         theta_deg = float(np.degrees(2.0 * np.arccos(np.clip(q_err[0], -1.0, 1.0))))
         a_cmd = float(np.linalg.norm(u_scaled[:3]))
         tau_cmd = float(np.linalg.norm(u_scaled[3:]))
+        # Altitude and targets for logging
+        R_E = 6371e3
+        alt_m = float(np.linalg.norm(r) - R_E)
+        env_cfg = self.cfg.get("env", {})
+        target_alt_m = float(env_cfg.get("target_alt_m", alt_m))
+        target_ecc = float(env_cfg.get("target_ecc", 0.0))
         return {
             "dr_rtn_m": float(np.linalg.norm(dr_rtn)),
             "dv_rtn_mps": float(np.linalg.norm(dv_rtn)),
             "da_m": da,
             "e": e_mag,
             "theta_deg": theta_deg,
+            "alt_m": alt_m,
+            "target_alt_m": target_alt_m,
+            "target_ecc": target_ecc,
             "density": float(ps.density),
             "in_eclipse": bool(ps.in_eclipse),
             "mass": float(ps.mass),

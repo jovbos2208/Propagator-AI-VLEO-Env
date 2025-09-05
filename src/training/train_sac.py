@@ -16,7 +16,7 @@ if str(SRC_DIR) not in sys.path:
 from rl_sat.envs.satellite_env import RLSatEnv
 from rl_sat.sim.interfaces import DummyPropagator
 from rl_sat.sim.shuttlecock_adapter import ShuttlecockPropagator
-from .callbacks import ProgressBarCallback, EvalEveryOrbitsTB
+from .callbacks import ProgressBarCallback, EvalEveryOrbitsTB, StepMetricsTB, EpisodeEndTB
 
 
 def make_env(cfg: dict, use_shuttle: bool, shuttle_cfg_path: str | None):
@@ -42,6 +42,8 @@ def main():
     ap.add_argument("--use-shuttlecock", action="store_true", help="Use Shuttlecock C++ env via adaptor")
     ap.add_argument("--shuttle-config", default="cpp/configs/shuttlecock_250km.json")
     ap.add_argument("--tb-logdir", default=None, help="TensorBoard log directory (enables TB logging)")
+    ap.add_argument("--tb-train-every", type=int, default=10, help="Log per-step TB metrics every N steps (default: 10)")
+    ap.add_argument("--tb-eval-orbits", type=int, default=10, help="Run eval and log TB every N orbits (default: 10)")
     ap.add_argument("--log-interval", type=int, default=1000, help="Training log interval (SB3)")
     ap.add_argument("--no-progress", action="store_true", help="Disable tqdm progress bar during training")
     ap.add_argument("--mp-start-method", default="spawn", choices=["spawn", "fork", "forkserver"], help="Multiprocessing start method for SubprocVecEnv")
@@ -79,7 +81,11 @@ def main():
         callbacks.append(ProgressBarCallback(total=args.total_steps, desc="SAC"))
     def make_eval_env():
         return DummyVecEnv([make_env(cfg, use_shuttle, args.shuttle_config)])
-    callbacks.append(EvalEveryOrbitsTB(make_eval_env, cfg, orbits_interval=10))
+    callbacks.append(EvalEveryOrbitsTB(make_eval_env, cfg, orbits_interval=int(args.tb_eval_orbits)))
+    if args.tb_logdir:
+        # Per-step logging of rewards and actions; and per-episode summaries
+        callbacks.append(StepMetricsTB(every=max(1, int(args.tb_train_every))))
+        callbacks.append(EpisodeEndTB())
     learn_kwargs = dict(total_timesteps=args.total_steps, log_interval=args.log_interval)
     if args.tb_logdir:
         learn_kwargs.update(tb_log_name="sac_rlsat")
